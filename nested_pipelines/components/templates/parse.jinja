@@ -1,0 +1,84 @@
+name: {{ name }}
+inputs:
+- {name: input, type: typing.Dict}
+outputs:
+{% for key, value in artifacts.items() %}
+- {name: {{ key }}, type: '{{ value }}'}
+{% endfor %}
+{% for key, value in parameters.items() %}
+- {name: {{ key }}, type: '{{ value }}'}
+{% endfor %}
+implementation:
+  container:
+    image: python:3.8
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'awscli' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+      --no-warn-script-location 'awscli' --user) && "$0" "$@"
+    - python3
+    - -u
+    - -c
+    - |
+      import argparse
+      import json
+      import subprocess
+
+      parser = argparse.ArgumentParser()
+      parser.add_argument("-i", "--input")
+      parser.add_argument(
+          "-a", "--artifacts", action="append", default=[], nargs=2, metavar=("NAME", "URL")
+      )
+      parser.add_argument(
+          "-p", "--parameters", action="append", default=[], nargs=2, metavar=("NAME", "PATH")
+      )
+      args = parser.parse_args()
+
+      input = json.loads(args.input)
+      for name, url in args.artifacts:
+          temp = input[name]
+          if temp.startswith("minio") or url.startswith("minio"):
+              assert temp.startswith("minio") and url.startswith("minio")
+
+              endpoint_url = "http://minio-service.kubeflow.svc.cluster.local:9000"
+              temp = "s3" + temp[5:]
+              url = "s3" + url[5:]
+
+          try:
+              subprocess.run(
+                  ["aws", "--endpoint-url", endpoint_url, "s3", "cp", temp, url]
+              ).check_returncode()
+          except subprocess.calledprocesserror:
+              subprocess.run(
+                  [
+                      "aws",
+                      "--endpoint-url",
+                      endpoint_url,
+                      "s3",
+                      "cp",
+                      "--recursive",
+                      temp,
+                      url,
+                  ]
+              ).check_returncode()
+      for name, path in args.parameters:
+          with open(path, "w") as f:
+              temp = input[name]
+              if isinstance(temp, str):
+                  f.write(temp)
+              else:
+                  f.write(json.dumps(temp))
+    args:
+    - -i
+    - {inputValue: input}
+{% for key in artifacts %}
+    - -a
+    - {{ key }}
+    - {outputUri: {{ key }}}
+{% endfor %}
+{% for key in parameters %}
+    - -p
+    - {{ key }}
+    - {outputPath: {{ key }}}
+{% endfor %}

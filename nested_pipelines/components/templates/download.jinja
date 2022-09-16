@@ -1,0 +1,107 @@
+name: {{ name }}
+inputs:
+{% for key in artifacts %}
+- {name: {{ key }}, type: String}
+{% endfor %}
+{% for key in parameters %}
+- {name: {{ key }}, type: String}
+{% endfor %}
+outputs:
+{% for key, value in artifacts.items() %}
+- {name: {{ key }}, type: '{{ value }}'}
+{% endfor %}
+{% for key, value in parameters.items() %}
+- {name: {{ key }}, type: '{{ value }}'}
+{% endfor %}
+implementation:
+  container:
+    image: python:3.8
+    command:
+    - sh
+    - -c
+    - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+      'awscli' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet
+      --no-warn-script-location 'awscli' --user) && "$0" "$@"
+    - python3
+    - -u
+    - -c
+    - |
+      import argparse
+      import subprocess
+
+      parser = argparse.ArgumentParser()
+      parser.add_argument(
+          "-a",
+          "--artifacts",
+          action="append",
+          default=[],
+          nargs=2,
+          metavar=("INPUT_URL", "OUTPUT_URL"),
+      )
+      parser.add_argument(
+          "-p",
+          "--parameters",
+          action="append",
+          default=[],
+          nargs=2,
+          metavar=("INPUT_URL", "OUTPUT_PATH"),
+      )
+      args = parser.parse_args()
+
+      for input_url, output_url in args.artifacts + args.parameters:
+          endpoint_url = "https://s3.amazonaws.com"
+          if input_url.startswith("minio") or output_url.startswith("minio"):
+              assert not (input_url.startswith("s3") or output_url.startswith("s3"))
+
+              endpoint_url = "http://minio-service.kubeflow.svc.cluster.local:9000"
+              if input_url.startswith("minio"):
+                  input_url = "s3" + input_url[5:]
+              if output_url.startswith("minio"):
+                  output_url = "s3" + output_url[5:]
+
+          if input_url.startswith("s3"):
+              try:
+                  subprocess.run(
+                      [
+                          "aws",
+                          "--endpoint-url",
+                          endpoint_url,
+                          "s3",
+                          "cp",
+                          input_url,
+                          output_url,
+                      ]
+                  ).check_returncode()
+              except subprocess.CalledProcessError:
+                  subprocess.run(
+                      [
+                          "aws",
+                          "--endpoint-url",
+                          endpoint_url,
+                          "s3",
+                          "cp",
+                          "--recursive",
+                          input_url,
+                          output_url,
+                      ]
+                  ).check_returncode()
+          else:
+              if output_url.startswith("s3"):
+                  temp = subprocess.Popen(["curl", input_url], stdout=subprocess.PIPE)
+                  subprocess.run(
+                      ["aws", "--endpoint-url", endpoint_url, "s3", "cp", "-", output_url],
+                      stdin=temp.stdout,
+                  ).check_returncode()
+              else:
+                  subprocess.run(["curl", input_url, "-o", output_url]).check_returncode()
+    args:
+{% for key in artifacts %}
+    - -a
+    - {inputValue: {{ key }}}
+    - {outputUri: {{ key }}}
+{% endfor %}
+{% for key in parameters %}
+    - -p
+    - {inputValue: {{ key }}}
+    - {outputPath: {{ key }}}
+{% endfor %}

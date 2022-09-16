@@ -1,0 +1,59 @@
+name: {{ name }}
+inputs:
+{% for key, value in artifacts.items() %}
+- {name: {{ key }}, type: '{{ value }}'}
+{% endfor %}
+{% for key, value in parameters.items() %}
+- {name: {{ key }}, type: '{{ value }}'}
+{% endfor %}
+outputs:
+- {name: output, type: typing.Dict}
+implementation:
+  container:
+    image: python:3.8
+    command:
+    - python3
+    - -u
+    - -c
+    - |
+      import argparse
+      import json
+
+      parser = argparse.ArgumentParser()
+      parser.add_argument(
+          "-a", "--artifacts", action="append", default=[], nargs=2, metavar=("NAME", "URL")
+      )
+      parser.add_argument(
+          "-p",
+          "--parameters",
+          action="append",
+          default=[],
+          nargs=2,
+          metavar=("NAME", "VALUE"),
+      )
+      parser.add_argument("-o", "--output")
+      args = parser.parse_args()
+
+      output = dict()
+      for name, value in args.artifacts:
+          output[name] = value
+      for name, value in args.parameters:
+          try:
+              output[name] = json.loads(value)
+          except ValueError:
+              output[name] = value
+      with open(args.output, "w") as f:
+          json.dump(output, f)
+    args:
+{% for key in artifacts %}
+    - -a
+    - {{ key }}
+    - {inputUri: {{ key }}}
+{% endfor %}
+{% for key in parameters %}
+    - -p
+    - {{ key }}
+    - {inputValue: {{ key }}}
+{% endfor %}
+    - -o
+    - {outputPath: output}
